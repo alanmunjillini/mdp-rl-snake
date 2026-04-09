@@ -43,11 +43,13 @@ class Agent:
     
     def update_n(self, state, action):
         # TODO - MP10: Update the N-table. 
-        pass
+        self.N[state][action] += 1
 
     def update_q(self, s, a, r, s_prime):
         # TODO - MP10: Update the Q-table. 
-        pass        
+        alpha = self.C / (self.C + self.N[s][a])
+        target = r + self.gamma * np.max(self.Q[s_prime])
+        self.Q[s][a] = self.Q[s][a] + alpha * (target - self.Q[s][a])
 
     def act(self, environment, points, dead):
         '''
@@ -69,6 +71,10 @@ class Agent:
         # TODO - compute the reward. This depends on snake's death and food consumption.
         # Tip: Use points and self.points to calculate if, and what type of, food was consumed
         reward = 0
+        if dead:
+            reward = -1
+        elif points > self.points:
+            reward = points - self.points
 
         # Update agent's self.points
         self.points = points
@@ -80,9 +86,12 @@ class Agent:
 
         if self._train:
             # Tip: Update N and Q tables in here
-            a_prime = None # TODO - MP10
+            if self.s is not None and self.a is not None:
+                self.update_n(self.s, self.a)
+                self.update_q(self.s, self.a, reward, s_prime)
+            a_prime = self.get_best_action(s_prime, train_mode=True)
         else:
-            a_prime = None # TODO - MP10
+            a_prime = self.get_best_action(s_prime, train_mode=False)
 
         if dead:
             # Between episodes, the environment should be reset, but the Q and N tables remain
@@ -105,7 +114,23 @@ class Agent:
         # For Q-update, this is just argmax_a Q(s, a)
         # For choosing action, we also consider exploration policy
 
-        return  # TODO - MP10
+        best_actions = []
+        best_value = None
+
+        for action in self.actions:
+            if train_mode and self.N[state][action] < self.Ne:
+                value = 1.0
+            else:
+                value = self.Q[state][action]
+
+            if best_value is None or value > best_value:
+                best_value = value
+                best_actions = [action]
+            elif value == best_value:
+                best_actions.append(action)
+
+        # deterministic tie-breaker
+        return min(best_actions)
 
     def _calculate_target_food(self, snake_head_x, snake_head_y, food_x, food_y, 
                            bigfood_x, bigfood_y, bigfood_val):
@@ -117,7 +142,18 @@ class Agent:
         one of them avoids worrying about dividing by zero)
         """
         # TODO - MP10: Implement this helper function
-        return
+        if bigfood_x is None or bigfood_y is None or bigfood_val <= 0:
+            return food_x, food_y
+
+        regular_dist = abs(snake_head_x - food_x) + abs(snake_head_y - food_y)
+        big_dist = abs(snake_head_x - bigfood_x) + abs(snake_head_y - bigfood_y)
+
+        regular_score = regular_dist / 1.0
+        big_score = big_dist / float(bigfood_val)
+
+        if big_score < regular_score:
+            return bigfood_x, bigfood_y
+        return food_x, food_y
 
     def _calculate_food_direction(self, snake_head_x, snake_head_y, target_food_x, target_food_y):
         """
@@ -127,7 +163,21 @@ class Agent:
         Returns food_dir_x and food_dir_y (0=same, 1=negative direction, 2=positive direction).
         """
         # TODO - MP10: Implement this helper function
-        pass
+        if target_food_x < snake_head_x:
+            food_dir_x = 1
+        elif target_food_x > snake_head_x:
+            food_dir_x = 2
+        else:
+            food_dir_x = 0
+
+        if target_food_y < snake_head_y:
+            food_dir_y = 1
+        elif target_food_y > snake_head_y:
+            food_dir_y = 2
+        else:
+            food_dir_y = 0
+
+        return food_dir_x, food_dir_y
     
     def _calculate_adjoining_obstacles(self, snake_head_x, snake_head_y, snake_body, rock_x, rock_y):
         """
@@ -135,7 +185,57 @@ class Agent:
         Returns 8 binary flags for obstacles in each direction.
         """
         # TODO - MP10: Implement this helper function
-        return
+        # Border walls enclose playable coordinates: x in [1, width-2], y in [1, height-2]
+        wall_left = snake_head_x - 1 <= 0
+        wall_right = snake_head_x + 1 >= self.display_width - 1
+        wall_top = snake_head_y - 1 <= 0
+        wall_bottom = snake_head_y + 1 >= self.display_height - 1
+
+        # L-shaped rock occupies (rock_x, rock_y), (rock_x + 1, rock_y), (rock_x + 1, rock_y + 1)
+        rock_cells = {
+            (rock_x, rock_y),
+            (rock_x + 1, rock_y),
+            (rock_x + 1, rock_y + 1),
+        }
+
+        left_cell = (snake_head_x - 1, snake_head_y)
+        right_cell = (snake_head_x + 1, snake_head_y)
+        top_cell = (snake_head_x, snake_head_y - 1)
+        bottom_cell = (snake_head_x, snake_head_y + 1)
+
+        rock_left = left_cell in rock_cells
+        rock_right = right_cell in rock_cells
+        rock_top = top_cell in rock_cells
+        rock_bottom = bottom_cell in rock_cells
+
+        if wall_left or rock_left:
+            adjoining_wall_x = 1
+        elif wall_right or rock_right:
+            adjoining_wall_x = 2
+        else:
+            adjoining_wall_x = 0
+
+        if wall_top or rock_top:
+            adjoining_wall_y = 1
+        elif wall_bottom or rock_bottom:
+            adjoining_wall_y = 2
+        else:
+            adjoining_wall_y = 0
+
+        body_cells = set(snake_body)
+        adjoining_body_top = 1 if top_cell in body_cells else 0
+        adjoining_body_bottom = 1 if bottom_cell in body_cells else 0
+        adjoining_body_left = 1 if left_cell in body_cells else 0
+        adjoining_body_right = 1 if right_cell in body_cells else 0
+
+        return (
+            adjoining_wall_x,
+            adjoining_wall_y,
+            adjoining_body_top,
+            adjoining_body_bottom,
+            adjoining_body_left,
+            adjoining_body_right,
+        )
 
     def generate_state(self, environment):
         '''
